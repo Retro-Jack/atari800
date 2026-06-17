@@ -160,6 +160,10 @@ static BOOL CtrlHandler(DWORD fdwCtrlType)
 }
 #endif /* HAVE_WINDOWS_H */
 
+#ifdef __EMSCRIPTEN__
+extern void gx_state_poll(void);  /* GenX deferred save/load, defined in atari.c */
+#endif
+
 int main(int argc, char **argv)
 {
 #if HAVE_WINDOWS_H
@@ -201,6 +205,11 @@ int main(int argc, char **argv)
 		}
 #endif
 		SDL_INPUT_Mouse();
+#ifdef __EMSCRIPTEN__
+		/* GenX-DOS deferred save/load state — runs on the main-loop asyncify
+		   stack so StateSav's nested emscripten_sleep is safe (see atari.c). */
+		gx_state_poll();
+#endif
 		Atari800_Frame();
 		if (Atari800_display_screen)
 			PLATFORM_DisplayScreen();

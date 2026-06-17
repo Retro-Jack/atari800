@@ -1616,3 +1616,34 @@ void Atari800_SetTVMode(int mode)
 #endif /* SOUND */
 	}
 }
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+/* GenX-DOS save/load state (systems/atari800/play.html).
+   StateSav_*AtariState reach emscripten_sleep (machine reinit), so they CANNOT
+   be invoked re-entrantly from a JS event while the blocking ASYNCIFY main loop
+   is mid-suspend — that corrupts the asyncify stack. So JS only sets a request
+   flag (no sleep); gx_state_poll(), called once per frame from the main loop
+   (sdl/main.c, same asyncify stack), performs the actual StateSav where the
+   nested sleep is safe. JS then polls gx_state_status() and reads/writes the
+   MEMFS file /gx-state.a8s itself (FS ops don't sleep). */
+#define GX_STATE_FILE "/gx-state.a8s"
+static volatile int gx_save_req = 0, gx_load_req = 0;
+static volatile int gx_status = 0;   /* 0 = idle/busy, 1 = ok, -1 = fail */
+
+EMSCRIPTEN_KEEPALIVE void gx_request_save(void) { gx_status = 0; gx_save_req = 1; }
+EMSCRIPTEN_KEEPALIVE void gx_request_load(void) { gx_status = 0; gx_load_req = 1; }
+EMSCRIPTEN_KEEPALIVE int  gx_state_status(void) { return gx_status; }
+
+/* Called once per frame from the main loop. Runs on the main-loop asyncify
+   stack, so StateSav's nested emscripten_sleep is safe here. */
+EMSCRIPTEN_KEEPALIVE void gx_state_poll(void) {
+	if (gx_save_req) {
+		gx_save_req = 0;
+		gx_status = StateSav_SaveAtariState(GX_STATE_FILE, "wb", TRUE) ? 1 : -1;
+	} else if (gx_load_req) {
+		gx_load_req = 0;
+		gx_status = StateSav_ReadAtariState(GX_STATE_FILE, "rb") ? 1 : -1;
+	}
+}
+#endif /* __EMSCRIPTEN__ */
