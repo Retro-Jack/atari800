@@ -85,6 +85,30 @@ window.Module = {
 Then inject `atari800.js`. The wasm reads the args when `callMain` runs (after
 `preRun` finishes), so the ROM will already be in the FS.
 
+## Save-state support
+
+Beyond the build script, the fork makes one change to the emulator source: it
+exposes atari800's own save-state machinery to JavaScript, for the GenX-DOS
+save/load buttons. This is a self-contained `#ifdef __EMSCRIPTEN__` block at the
+end of `src/atari.c`, plus a single call added to the frame loop in
+`src/sdl/main.c`.
+
+The catch is **ASYNCIFY**. atari800's `StateSav_*AtariState` routines reinitialise
+the machine, which reaches `emscripten_sleep`. Calling them straight from a JS
+event handler — while the blocking main loop is mid-suspend — would open a second
+concurrent ASYNCIFY operation and corrupt the asyncify stack. So the actual work
+is deferred onto the main-loop stack:
+
+| Function (`EMSCRIPTEN_KEEPALIVE`) | Role |
+|-----------------------------------|------|
+| `gx_request_save()` / `gx_request_load()` | JS calls these; they only set a request flag (no sleep). |
+| `gx_state_poll()` | Called once per frame from `sdl/main.c`'s loop (same asyncify stack), it runs the real `StateSav_SaveAtariState` / `StateSav_ReadAtariState` — where the nested sleep is safe — into the MEMFS file `/gx-state.a8s`. |
+| `gx_state_status()` | JS polls this (`0` busy, `1` ok, `-1` fail), then reads or writes `/gx-state.a8s` itself (plain FS ops don't sleep). |
+
+So a save is: JS calls `gx_request_save()`, waits for `gx_state_status()` to go
+`1`, then reads `/gx-state.a8s` out of MEMFS. A load is the reverse: write the
+file, call `gx_request_load()`, wait for `1`.
+
 ## Why this fork exists
 
 Built to integrate Atari 800XL into [GenX-DOS](https://github.com/Retro-Jack/GenX-DOS)
@@ -95,5 +119,7 @@ off-the-shelf options were ruled out first:
 - **EmulatorJS** — ships an Atari 5200 core but no atari800 / 800XL core.
 - **RetroArch web nightly** — atari800 is not in the ~90 cores in the official emscripten build.
 
-So we build from source. This fork only adds `build-wasm.sh` and this file;
-the upstream source is untouched.
+So we build from source. Beyond `build-wasm.sh` and this file, the only change
+to the upstream source is the save-state hook described above (a self-contained
+block in `src/atari.c` plus one call in `src/sdl/main.c`) — everything else is
+stock atari800.
